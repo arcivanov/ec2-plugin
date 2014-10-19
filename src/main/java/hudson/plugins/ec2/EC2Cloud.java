@@ -98,8 +98,8 @@ import static javax.servlet.http.HttpServletResponse.*;
  */
 public abstract class EC2Cloud extends Cloud {
 
-	public static final String DEFAULT_EC2_HOST = "us-east-1";
-	public static final String EC2_URL_HOST = "ec2.amazonaws.com";
+    public static final String DEFAULT_EC2_HOST = "us-east-1";
+    public static final String EC2_URL_HOST = "ec2.amazonaws.com";
 
 	private final boolean useInstanceProfileForCredentials;
     private final String accessId;
@@ -135,7 +135,7 @@ public abstract class EC2Cloud extends Cloud {
             this.templates=templates;
         }
 
-        if(instanceCapStr.equals("")) {
+        if(StringUtils.isEmpty(instanceCapStr)) {
             this.instanceCap = Integer.MAX_VALUE;
         } else {
             this.instanceCap = Integer.parseInt(instanceCapStr);
@@ -371,7 +371,7 @@ public abstract class EC2Cloud extends Cloud {
     }
 
     @Override
-	public Collection<PlannedNode> provision(Label label, int excessWorkload) {
+    public Collection<PlannedNode> provision(Label label, int excessWorkload) {
         try {
             // Count number of pending executors from spot requests
 			for(EC2SpotSlave n : NodeIterator.nodes(EC2SpotSlave.class)){
@@ -441,7 +441,7 @@ public abstract class EC2Cloud extends Cloud {
     }
 
     @Override
-	public boolean canProvision(Label label) {
+    public boolean canProvision(Label label) {
         return getTemplate(label)!=null;
     }
 

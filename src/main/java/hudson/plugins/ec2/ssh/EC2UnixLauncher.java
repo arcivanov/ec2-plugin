@@ -135,8 +135,9 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
             // TODO: parse the version number. maven-enforcer-plugin might help
             logger.println("Verifying that java exists");
             if(conn.exec("java -fullversion", logger) !=0) {
-                logger.println("Installing Java");
-
+                logger.println("Java not found. Installing Java...");
+                
+                
                 String jdk = "java1.6.0_12";
                 String path = "/hudson-ci/jdk/linux-i586/" + jdk + ".tgz";
 
