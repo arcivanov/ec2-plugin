@@ -23,7 +23,6 @@
  */
 package hudson.plugins.ec2;
 
-import com.amazonaws.AmazonServiceException;
 import hudson.Extension;
 import hudson.Util;
 import hudson.model.Describable;
@@ -53,6 +52,7 @@ import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 
 import com.amazonaws.AmazonClientException;
+import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.model.*;
 
@@ -90,6 +90,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
     public final boolean useDedicatedTenancy;
     public AMITypeData amiType;
     public int launchTimeout;
+    public boolean rebootAfterBuild;
 
     private transient /*almost final*/ Set<LabelAtom> labelSet;
 	private transient /*almost final*/ Set<String> securityGroupSet;
@@ -104,7 +105,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
 	public transient String rootCommandPrefix;
 
     @DataBoundConstructor
-    public SlaveTemplate(String ami, String zone, SpotConfiguration spotConfig, String securityGroups, String remoteFS, InstanceType type, String labelString, Node.Mode mode, String description, String initScript, String userData, String numExecutors, String remoteAdmin, AMITypeData amiType, String jvmopts, boolean stopOnTerminate, String subnetId, List<EC2Tag> tags, String idleTerminationMinutes, boolean usePrivateDnsName, String instanceCapStr, String iamInstanceProfile, boolean useEphemeralDevices, boolean useDedicatedTenancy, String launchTimeoutStr, boolean associatePublicIp, String customDeviceMapping) {
+    public SlaveTemplate(String ami, String zone, SpotConfiguration spotConfig, String securityGroups, String remoteFS, InstanceType type, String labelString, Node.Mode mode, String description, String initScript, String userData, String numExecutors, String remoteAdmin, AMITypeData amiType, String jvmopts, boolean stopOnTerminate, String subnetId, List<EC2Tag> tags, String idleTerminationMinutes, boolean usePrivateDnsName, String instanceCapStr, String iamInstanceProfile, boolean useEphemeralDevices, boolean useDedicatedTenancy, String launchTimeoutStr, boolean associatePublicIp, String customDeviceMapping, boolean rebootAfterBuild) {
         this.ami = ami;
         this.zone = zone;
         this.spotConfig = spotConfig;
@@ -116,7 +117,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
         this.mode = mode;
         this.description = description;
         this.initScript = initScript;
-        this.userData = userData;
+        this.userData = Util.fixNull( userData );
         this.numExecutors = Util.fixNull(numExecutors).trim();
         this.remoteAdmin = remoteAdmin;
         this.jvmopts = jvmopts;
@@ -143,6 +144,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
         this.iamInstanceProfile = iamInstanceProfile;
         this.useEphemeralDevices = useEphemeralDevices;
         this.customDeviceMapping = customDeviceMapping;
+        this.rebootAfterBuild = rebootAfterBuild;
 
         readResolve(); // initialize
     }
@@ -152,10 +154,27 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
      */
     public SlaveTemplate(String ami, String zone, SpotConfiguration spotConfig, String securityGroups, String remoteFS, String sshPort, InstanceType type, String labelString, Node.Mode mode, String description, String initScript, String userData, String numExecutors, String remoteAdmin, String rootCommandPrefix, String jvmopts, boolean stopOnTerminate, String subnetId, List<EC2Tag> tags, String idleTerminationMinutes, boolean usePrivateDnsName, String instanceCapStr, String iamInstanceProfile, boolean useEphemeralDevices, String launchTimeoutStr)
     {
-    	this(ami, zone, spotConfig, securityGroups, remoteFS, type, labelString, mode, description, initScript, userData, numExecutors, remoteAdmin, new UnixData(rootCommandPrefix, sshPort), jvmopts, stopOnTerminate, subnetId, tags, idleTerminationMinutes, usePrivateDnsName, instanceCapStr, iamInstanceProfile, useEphemeralDevices, false, launchTimeoutStr, false, null); 
+        this(ami, zone, spotConfig, securityGroups, remoteFS, type, labelString, mode, description, initScript, userData, numExecutors, remoteAdmin, new UnixData(rootCommandPrefix, sshPort), jvmopts, stopOnTerminate, subnetId, tags, idleTerminationMinutes, usePrivateDnsName, instanceCapStr, iamInstanceProfile, useEphemeralDevices, false, launchTimeoutStr, false, null, false); 
     }
-    
-    public EC2Cloud getParent() {
+
+    /**
+     * Backward compatible constructor for reloading previous version data
+     */
+    public SlaveTemplate(String ami, String zone, SpotConfiguration spotConfig, String securityGroups, String remoteFS,
+            InstanceType type, String labelString, Node.Mode mode, String description, String initScript, String userData,
+            String numExecutors, String remoteAdmin, AMITypeData amiType, String jvmopts, boolean stopOnTerminate,
+            String subnetId, List<EC2Tag> tags, String idleTerminationMinutes, boolean usePrivateDnsName, String instanceCapStr,
+            String iamInstanceProfile, boolean useEphemeralDevices, boolean useDedicatedTenancy, String launchTimeoutStr,
+            boolean associatePublicIp, String customDeviceMapping)
+    {
+        this( ami, zone, spotConfig, securityGroups, remoteFS, type, labelString, mode, description, initScript, userData,
+                numExecutors, remoteAdmin, amiType, jvmopts, stopOnTerminate, subnetId, tags, idleTerminationMinutes,
+                usePrivateDnsName, instanceCapStr, iamInstanceProfile, useEphemeralDevices, useDedicatedTenancy,
+                launchTimeoutStr, associatePublicIp, customDeviceMapping, false );
+    }
+
+    public EC2Cloud getParent()
+    {
         return parent;
     }
 
@@ -365,9 +384,8 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
             }
 
             boolean hasCustomTypeTag = false;
-            HashSet<Tag> inst_tags = null;
+            HashSet<Tag> inst_tags = new HashSet<Tag>();
             if (tags != null && !tags.isEmpty()) {
-                inst_tags = new HashSet<Tag>();
                 for(EC2Tag t : tags) {
                     inst_tags.add(new Tag(t.getName(), t.getValue()));
                     diFilters.add(new Filter("tag:"+t.getName()).withValues(t.getValue()));
@@ -413,8 +431,8 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
                 Instance inst = ec2.runInstances(riRequest).getReservation().getInstances().get(0);
 
                 /* Now that we have our instance, we can set tags on it */
-                if (inst_tags != null) {
-                    updateRemoteTags(ec2, inst_tags, inst.getInstanceId());
+                if ( !inst_tags.isEmpty() ) {
+                    updateRemoteTags( ec2, inst_tags, inst.getInstanceId() );
 
                     // That was a remote request - we should also update our local instance data.
                     inst.setTags(inst_tags);
@@ -654,11 +672,11 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
     }
 
     protected EC2OndemandSlave newOndemandSlave(Instance inst) throws FormException, IOException {
-        return new EC2OndemandSlave(inst.getInstanceId(), description, remoteFS, getNumExecutors(), labels, mode, initScript, remoteAdmin, jvmopts, stopOnTerminate, idleTerminationMinutes, inst.getPublicDnsName(), inst.getPrivateDnsName(), EC2Tag.fromAmazonTags(inst.getTags()), parent.name, usePrivateDnsName, useDedicatedTenancy, getLaunchTimeout(), amiType);
+        return new EC2OndemandSlave(inst.getInstanceId(), description, remoteFS, getNumExecutors(), labels, mode, initScript, remoteAdmin, jvmopts, stopOnTerminate, idleTerminationMinutes, inst.getPublicDnsName(), inst.getPrivateDnsName(), EC2Tag.fromAmazonTags(inst.getTags()), parent.name, usePrivateDnsName, useDedicatedTenancy, getLaunchTimeout(), amiType, rebootAfterBuild);
     }
 
     protected EC2SpotSlave newSpotSlave(SpotInstanceRequest sir, String name) throws FormException, IOException {
-        return new EC2SpotSlave(name, sir.getSpotInstanceRequestId(), description, remoteFS, getNumExecutors(), mode, initScript, labels, remoteAdmin, jvmopts, idleTerminationMinutes, EC2Tag.fromAmazonTags(sir.getTags()), parent.name, usePrivateDnsName, getLaunchTimeout(), amiType);
+        return new EC2SpotSlave(name, sir.getSpotInstanceRequestId(), description, remoteFS, getNumExecutors(), mode, initScript, labels, remoteAdmin, jvmopts, idleTerminationMinutes, EC2Tag.fromAmazonTags(sir.getTags()), parent.name, usePrivateDnsName, getLaunchTimeout(), amiType, rebootAfterBuild);
     }
 
     /**
