@@ -127,7 +127,7 @@ public abstract class EC2AbstractSlave extends Slave {
 
     protected final int launchTimeout;
     
-    protected volatile Future<?> ongoingRebootReconnect;
+    protected transient volatile Future<?> ongoingRebootReconnect;
 
     // Deprecated by the AMITypeData data structure
     @Deprecated
