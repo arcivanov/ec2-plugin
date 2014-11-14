@@ -162,11 +162,12 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
             // bug in ec2-sshd?
 
             logger.println("Copying slave.jar");
-            scp.put(Hudson.getInstance().getJnlpJars("slave.jar").readFully(),
+
+            scp.put(Jenkins.getInstance().getJnlpJars("slave.jar").readFully(),
                     "slave.jar",tmpDir);
 
             String jvmopts = computer.getNode().jvmopts;
-            String launchString = "java " + (jvmopts != null ? jvmopts : "") + " -jar " + tmpDir + "/slave.jar";
+            String launchString = "java " + (jvmopts != null ? jvmopts : "") + " -jar '" + tmpDir + "/slave.jar' -slaveLog '" + tmpDir + "/slave.log'";
             logger.println("Launching slave agent: " + launchString);
             final Session sess = conn.openSession();
             sess.execCommand(launchString);

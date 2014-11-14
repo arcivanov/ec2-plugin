@@ -259,10 +259,14 @@ public abstract class EC2AbstractSlave extends Slave {
     {
         // Firstly, take the computer offline
         final EC2Computer computer = (EC2Computer) toComputer();
+        LOGGER.info("Preparing to reboot EC2 instance " + getInstanceId() + ", computer " + computer.getName());
         computer.setTemporarilyOffline(true, REBOOT_OFFLINE_CAUSE);
+        LOGGER.fine("EC2 instance " + getInstanceId() + ": set computer " + computer.getName() + " offline");
         // Now disconnect from the instance and wait for disconnect to complete
         try {
+            LOGGER.info("EC2 instance " + getInstanceId() + ": disconnecting " + computer.getName());
             computer.disconnect(REBOOT_OFFLINE_CAUSE).get();
+            LOGGER.info("EC2 instance " + getInstanceId() + ": disconnected " + computer.getName());
         }
         catch (Exception e) {
             Instance i = getInstance(getInstanceId(), getCloud());
