@@ -30,11 +30,14 @@ import hudson.model.Descriptor.FormException;
 import hudson.model.Hudson;
 import hudson.model.Node;
 import hudson.model.Slave;
+import hudson.remoting.Channel;
+import hudson.remoting.RequestAbortedException;
 import hudson.slaves.NodeProperty;
 import hudson.slaves.ComputerLauncher;
 import hudson.slaves.OfflineCause;
 import hudson.slaves.OfflineCause.ByCLI;
 import hudson.slaves.RetentionStrategy;
+import hudson.util.RemotingDiagnostics;
 import hudson.util.ListBoxModel;
 
 import java.io.IOException;
@@ -54,7 +57,6 @@ import jenkins.util.Timer;
 import net.sf.json.JSONObject;
 
 import org.apache.commons.lang.StringUtils;
-import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 
@@ -102,6 +104,7 @@ public abstract class EC2AbstractSlave extends Slave {
     public final String jvmopts; //e.g. -Xmx1g
     public final boolean stopOnTerminate;
     public final boolean rebootAfterBuild;
+    public final boolean useJnlp;
     public final String idleTerminationMinutes;
     public final boolean usePrivateDnsName;
     public final boolean useDedicatedTenancy;
@@ -138,7 +141,7 @@ public abstract class EC2AbstractSlave extends Slave {
     public static final String TEST_ZONE = "testZone";
 
 
-    public EC2AbstractSlave(String name, String instanceId, String description, String remoteFS, int numExecutors, Mode mode, String labelString, ComputerLauncher launcher, RetentionStrategy<EC2Computer> retentionStrategy, String initScript, List<? extends NodeProperty<?>> nodeProperties, String remoteAdmin, String jvmopts, boolean stopOnTerminate, String idleTerminationMinutes, List<EC2Tag> tags, String cloudName, boolean usePrivateDnsName, boolean useDedicatedTenancy, int launchTimeout, AMITypeData amiType, boolean rebootAfterBuild) throws FormException, IOException {
+    public EC2AbstractSlave(String name, String instanceId, String description, String remoteFS, int numExecutors, Mode mode, String labelString, ComputerLauncher launcher, RetentionStrategy<EC2Computer> retentionStrategy, String initScript, List<? extends NodeProperty<?>> nodeProperties, String remoteAdmin, String jvmopts, boolean stopOnTerminate, String idleTerminationMinutes, List<EC2Tag> tags, String cloudName, boolean usePrivateDnsName, boolean useDedicatedTenancy, int launchTimeout, AMITypeData amiType, boolean rebootAfterBuild, boolean useJnlp) throws FormException, IOException {
 
         super(name, "", remoteFS, numExecutors, mode, labelString, launcher, retentionStrategy, nodeProperties);
 
@@ -155,6 +158,7 @@ public abstract class EC2AbstractSlave extends Slave {
         this.launchTimeout = launchTimeout;
         this.amiType = amiType;
         this.rebootAfterBuild = rebootAfterBuild;
+        this.useJnlp = useJnlp;
         readResolve();
     }
 
@@ -249,22 +253,12 @@ public abstract class EC2AbstractSlave extends Slave {
 
     void reboot()
     {
-        // Firstly, take the computer offline
         final EC2Computer computer = (EC2Computer) toComputer();
         LOGGER.info("Preparing to reboot EC2 instance " + getInstanceId() + ", computer " + computer.getName());
-        computer.setTemporarilyOffline(true, REBOOT_OFFLINE_CAUSE);
-        LOGGER.fine("EC2 instance " + getInstanceId() + ": set computer " + computer.getName() + " offline");
+        // Firstly, take the computer offline
+        takeOffline(REBOOT_OFFLINE_CAUSE);
         // Now disconnect from the instance and wait for disconnect to complete
-        try {
-            LOGGER.info("EC2 instance " + getInstanceId() + ": disconnecting " + computer.getName());
-            computer.disconnect(REBOOT_OFFLINE_CAUSE).get();
-            LOGGER.info("EC2 instance " + getInstanceId() + ": disconnected " + computer.getName());
-        }
-        catch (Exception e) {
-            Instance i = getInstance(getInstanceId(), getCloud());
-            LOGGER.log(Level.WARNING, "Error while disconnecting from EC2 instance: " + getInstanceId() + " info: "
-                    + ((i != null) ? i : ""), e);
-        }
+        disconnect(REBOOT_OFFLINE_CAUSE);
         try {
             AmazonEC2 ec2 = getCloud().connect();
             RebootInstancesRequest request = new RebootInstancesRequest(Collections.singletonList(getInstanceId()));
@@ -280,6 +274,7 @@ public abstract class EC2AbstractSlave extends Slave {
     }
 
     void stop() {
+        disconnect(null);
         try {
             AmazonEC2 ec2 = getCloud().connect();
             StopInstancesRequest request = new StopInstancesRequest(
@@ -295,6 +290,7 @@ public abstract class EC2AbstractSlave extends Slave {
     }
 
     boolean terminateInstance() {
+        disconnect(null);
         try {
             AmazonEC2 ec2 = getCloud().connect();
             TerminateInstancesRequest request = new TerminateInstancesRequest(Collections.singletonList(getInstanceId()));
@@ -305,6 +301,63 @@ public abstract class EC2AbstractSlave extends Slave {
         } catch (AmazonClientException e) {
             LOGGER.log(Level.WARNING,"Failed to terminate EC2 instance: "+getInstanceId(),e);
             return false;
+        }
+    }
+
+    void takeOffline(OfflineCause cause)
+    {
+        final EC2Computer computer = (EC2Computer) toComputer();
+        if (computer != null) {
+            computer.setTemporarilyOffline(true, REBOOT_OFFLINE_CAUSE);
+            LOGGER.fine("EC2 instance " + getInstanceId() + ": set computer " + computer.getName() + " offline");
+        }
+    }
+
+    void disconnect(OfflineCause cause)
+    {
+        // Stop slave process if necessary
+        stopSlaveProcess();
+        final EC2Computer computer = (EC2Computer) toComputer();
+        if (computer != null) {
+            try {
+                LOGGER.info("EC2 instance " + getInstanceId() + ": disconnecting " + computer.getName());
+                computer.disconnect(REBOOT_OFFLINE_CAUSE).get();
+                LOGGER.info("EC2 instance " + getInstanceId() + ": disconnected " + computer.getName());
+            }
+            catch (Exception e) {
+                Instance i = getInstance(getInstanceId(), getCloud());
+                LOGGER.log(useJnlp ? Level.FINER : Level.WARNING, "Error while disconnecting from EC2 instance: "
+                        + getInstanceId() + " info: " + ((i != null) ? i : ""), e);
+            }
+        }
+    }
+
+    void stopSlaveProcess()
+    {
+        if (useJnlp) {
+            final EC2Computer computer = (EC2Computer) toComputer();
+            if (computer != null) {
+                final Channel channel = computer.getChannel();
+                if (channel != null) {
+                    try {
+                        LOGGER.info("EC2 instance " + getInstanceId() + ": shutting down JNLP agent " + computer.getName());
+                        RemotingDiagnostics.executeGroovy("System.exit(0);", channel);
+                    }
+                    catch (RequestAbortedException e) {
+                        LOGGER.log(Level.FINER, "EC2 instance " + getInstanceId()
+                                + ": received an expected request abort error shutting down JNLP slave process", e);
+                    }
+                    catch (IOException e) {
+                        LOGGER.log(Level.WARNING, "EC2 instance " + getInstanceId()
+                                + ": received an unexpected I/O error shutting down JNLP slave process", e);
+                    }
+                    catch (InterruptedException e) {
+                        LOGGER.log(Level.WARNING, "EC2 instance " + getInstanceId()
+                                + ": interrupted while shutting down JNLP slave process", e);
+                    }
+                    LOGGER.info("EC2 instance " + getInstanceId() + ": shut down JNLP agent " + computer.getName());
+                }
+            }
         }
     }
 
