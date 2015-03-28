@@ -910,7 +910,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
 
     public String getAdminPassword()
     {
-      return amiType.isWindows() ? ((WindowsData)amiType).getPassword() : "";
+      return amiType.isWindows() ? ((WindowsData)amiType).getPassword().getPlainText() : "";
     }
     
     private boolean isUseHTTPS() {

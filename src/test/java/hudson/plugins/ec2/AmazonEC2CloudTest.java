@@ -25,6 +25,8 @@ package hudson.plugins.ec2;
 
 import org.jvnet.hudson.test.HudsonTestCase;
 
+import hudson.util.Secret;
+
 import java.util.Collections;
 
 /**
