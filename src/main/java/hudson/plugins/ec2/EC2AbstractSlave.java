@@ -99,8 +99,8 @@ public abstract class EC2AbstractSlave extends Slave {
     public final String initScript;
     public final String tmpDir;
     public final String remoteAdmin; // e.g. 'ubuntu'
-    
-    
+
+
     public final String jvmopts; //e.g. -Xmx1g
     public final boolean stopOnTerminate;
     public final boolean rebootAfterBuild;
@@ -171,14 +171,14 @@ public abstract class EC2AbstractSlave extends Slave {
     	if (instanceId == null) {
     		instanceId = getNodeName();
     	}
-    	
+
     	if (amiType == null) {
     	    amiType = new UnixData(rootCommandPrefix, Integer.toString(sshPort));
     	}
 
     	return this;
     }
-    
+
     public EC2Cloud getCloud() {
     	return (EC2Cloud) Hudson.getInstance().getCloud(cloudName);
     }
@@ -230,12 +230,13 @@ public abstract class EC2AbstractSlave extends Slave {
     }
 
     public static Instance getInstance(String instanceId, EC2Cloud cloud) {
+        if (instanceId == null || instanceId == "" || cloud == null)
+            return null;
+
         Instance i = null;
         try {
             DescribeInstancesRequest request = new DescribeInstancesRequest();
             request.setInstanceIds(Collections.<String>singletonList(instanceId));
-            if (cloud == null)
-                return null;
             AmazonEC2 ec2 = cloud.connect();
             List<Reservation> reservations = ec2.describeInstances(request).getReservations();
             if (reservations.size() > 0) {
@@ -366,7 +367,7 @@ public abstract class EC2AbstractSlave extends Slave {
         String sshPort = amiType.isUnix() ? ((UnixData)amiType).getSshPort() : "22";
         if (sshPort == null || sshPort.length() == 0)
             return 22;
-        
+
         int port = 0;
         try {
             port = Integer.parseInt(sshPort);
@@ -457,7 +458,7 @@ public abstract class EC2AbstractSlave extends Slave {
         Instance inst = getInstance(getInstanceId(), getCloud());
 
         /* Now that we have our instance, we can set tags on it */
-        if (tags != null && !tags.isEmpty()) {
+        if (inst != null && tags != null && !tags.isEmpty()) {
             HashSet<Tag> inst_tags = new HashSet<Tag>();
 
             for(EC2Tag t : tags) {
@@ -493,7 +494,7 @@ public abstract class EC2AbstractSlave extends Slave {
     public boolean getUsePrivateDnsName() {
         return usePrivateDnsName;
     }
-    
+
     public String getAdminPassword() {
         return amiType.isWindows() ? ((WindowsData)amiType).getPassword().getPlainText() : "";
     }
@@ -545,7 +546,7 @@ public abstract class EC2AbstractSlave extends Slave {
 			AWSCredentialsProvider credentialsProvider = EC2Cloud.createCredentialsProvider(useInstanceProfileForCredentials, accessId, secretKey);
 			return fillZoneItems(credentialsProvider, region);
 		}
-		
+
 		public List<Descriptor<AMITypeData>> getAMITypeDescriptors()
 		{
 		    return Hudson.getInstance().<AMITypeData,Descriptor<AMITypeData>>getDescriptorList(AMITypeData.class);

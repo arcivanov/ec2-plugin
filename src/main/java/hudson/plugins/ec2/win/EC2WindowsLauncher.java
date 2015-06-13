@@ -2,6 +2,7 @@ package hudson.plugins.ec2.win;
 
 import hudson.model.Descriptor;
 import hudson.model.Hudson;
+import hudson.model.TaskListener;
 import hudson.plugins.ec2.EC2Computer;
 import hudson.plugins.ec2.EC2ComputerLauncher;
 import hudson.plugins.ec2.win.winrm.WindowsProcess;
@@ -24,13 +25,14 @@ public class EC2WindowsLauncher extends EC2ComputerLauncher {
     final long sleepBetweenAttemps = TimeUnit.SECONDS.toMillis(10);
     
     @Override
-    protected void launch(EC2Computer computer, PrintStream logger, Instance inst) throws IOException, AmazonClientException,
+    protected void launch(EC2Computer computer, TaskListener listener, Instance inst) throws IOException, AmazonClientException,
     InterruptedException {
+        final PrintStream logger = listener.getLogger();
         final WinConnection connection = connectToWinRM(computer, logger);
 
         try {
             String initScript = computer.getNode().initScript;
-            String tmpDir = (computer.getNode().tmpDir != null ? computer.getNode().tmpDir : "C:\\Windows\\Temp\\");
+            String tmpDir = (computer.getNode().tmpDir != null && !computer.getNode().tmpDir.equals("") ? computer.getNode().tmpDir : "C:\\Windows\\Temp\\");
             
             logger.println("Creating tmp directory if it does not exist");
             connection.execute("if not exist " + tmpDir + " mkdir " + tmpDir);

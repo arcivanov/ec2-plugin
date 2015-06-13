@@ -23,22 +23,29 @@
  */
 package hudson.plugins.ec2.ssh;
 
+import hudson.FilePath;
 import hudson.Util;
 import hudson.ProxyConfiguration;
 import hudson.model.Descriptor;
 import hudson.model.Hudson;
+import hudson.model.TaskListener;
+import hudson.plugins.ec2.EC2AbstractSlave;
 import hudson.plugins.ec2.EC2ComputerLauncher;
-import hudson.plugins.ec2.EC2Cloud;
 import hudson.plugins.ec2.EC2Computer;
+import hudson.plugins.ec2.SlaveTemplate;
 import hudson.remoting.Channel;
 import hudson.remoting.Channel.Listener;
+import hudson.slaves.CommandLauncher;
 import hudson.slaves.ComputerLauncher;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
+import java.util.List;
 
 import jenkins.model.Jenkins;
 
@@ -73,12 +80,13 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
 
 
     @Override
-	protected void launch(EC2Computer computer, PrintStream logger, Instance inst) throws IOException, AmazonClientException, InterruptedException {
+	protected void launch(EC2Computer computer, TaskListener listener, Instance inst) throws IOException, AmazonClientException, InterruptedException {
         final Connection bootstrapConn;
         final Connection conn;
         Connection cleanupConn = null; // java's code path analysis for final doesn't work that well.
         boolean successful = false;
-        
+        PrintStream logger = listener.getLogger();
+
         try {
             bootstrapConn = connectToSsh(computer, logger);
             int bootstrapResult = bootstrap(bootstrapConn, computer, logger);
@@ -144,12 +152,12 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
                 String path = "/hudson-ci/jdk/linux-i586/" + jdk + ".tgz";
 
                 URL url = computer.getCloud().buildPresignedURL(path);
-                if(conn.exec("wget -nv -O " + tmpDir + jdk + ".tgz '" + url + "'", logger) !=0) {
+                if(conn.exec("wget -nv -O " + tmpDir + "/" + jdk + ".tgz '" + url + "'", logger) !=0) {
                     logger.println("Failed to download Java");
                     return;
                 }
 
-                if(conn.exec(buildUpCommand(computer, "tar xz -C /usr -f " + tmpDir + jdk + ".tgz"), logger) !=0) {
+                if(conn.exec(buildUpCommand(computer, "tar xz -C /usr -f " + tmpDir + "/" + jdk + ".tgz"), logger) !=0) {
                     logger.println("Failed to install Java");
                     return;
                 }
@@ -170,21 +178,74 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
 
             String jvmopts = computer.getNode().jvmopts;
             String launchString = "java " + (jvmopts != null ? jvmopts : "") + " -jar '" + tmpDir + "/slave.jar' -slaveLog '" + tmpDir + "/slave.log'";
-            logger.println("Launching slave agent: " + launchString);
-            final Session sess = conn.openSession();
-            sess.execCommand(launchString);
-            computer.setChannel(sess.getStdout(),sess.getStdin(),logger,new Listener() {
-                @Override
-				public void onClosed(Channel channel, IOException cause) {
-                    sess.close();
-                    conn.close();
+
+            // TODO: I don't get these templates. How are they named/labeled and when will there be multiples?
+            // Need to find out how to map this stuff onto the EC2AbstractSlave instance as it seems to have
+            // some of the same props.
+            List<SlaveTemplate> templates = computer.getCloud().getTemplates();
+            SlaveTemplate slaveTemplate = null;
+            if (templates != null && !templates.isEmpty()) {
+                slaveTemplate = templates.get(0);
+            }
+
+            if (slaveTemplate != null && slaveTemplate.isConnectBySSHProcess()) {
+                EC2AbstractSlave node = computer.getNode();
+                File identityKeyFile = createIdentityKeyFile(computer);
+
+                try {
+                    // Obviously the master must have an installed ssh client.
+                    String sshClientLaunchString =
+                            String.format("ssh -o StrictHostKeyChecking=no -i %s %s@%s -p %d %s",
+                                    identityKeyFile.getAbsolutePath(),
+                                    node.remoteAdmin,
+                                    getEC2HostAddress(computer, inst),
+                                    node.getSshPort(),
+                                    launchString);
+
+                    logger.println("Launching slave agent (via SSH client process): " + sshClientLaunchString);
+                    CommandLauncher commandLauncher = new CommandLauncher(sshClientLaunchString);
+                    commandLauncher.launch(computer, listener);
+                } finally {
+                    identityKeyFile.delete();
                 }
-            });
-            
+            } else {
+                logger.println("Launching slave agent (via Trilead SSH2 Connection): " + launchString);
+                final Session sess = conn.openSession();
+                sess.execCommand(launchString);
+                computer.setChannel(sess.getStdout(),sess.getStdin(),logger,new Listener() {
+                    @Override
+                    public void onClosed(Channel channel, IOException cause) {
+                        sess.close();
+                        conn.close();
+                    }
+                });
+            }
+
             successful = true;
         } finally {
             if(cleanupConn != null && !successful)
                 cleanupConn.close();
+        }
+    }
+
+    private File createIdentityKeyFile(EC2Computer computer) throws IOException {
+        String privateKey = computer.getCloud().getPrivateKey().getPrivateKey();
+        File tempFile = File.createTempFile("ec2_", ".pem");
+
+        try {
+            FileWriter writer = new FileWriter(tempFile);
+            try {
+                writer.write(privateKey);
+                writer.flush();
+            } finally {
+                writer.close();
+            }
+            FilePath filePath = new FilePath(tempFile);
+            filePath.chmod(0400); // octal file mask - readonly by owner
+            return tempFile;
+        } catch (Exception e) {
+            tempFile.delete();
+            throw new IOException("Error creating temporary identity key file for connecting to EC2 slave.", e);
         }
     }
 
@@ -229,18 +290,7 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
                     throw new AmazonClientException("Timed out after "+ (waitTime / 1000) + " seconds of waiting for ssh to become available. (maximum timeout configured is "+ (timeout / 1000) + ")" );
                 }
                 Instance instance = computer.updateInstanceDescription();
-                String vpc_id = instance.getVpcId();
-                String host;
-
-                if (computer.getNode().usePrivateDnsName) {
-                    host = instance.getPrivateDnsName();
-                } else {
-                    host = instance.getPublicDnsName();
-                    // If we fail to get a public DNS name, use the private IP.
-                    if (host == null || host.equals("")) {
-                        host = instance.getPrivateIpAddress();
-                    }
-                }
+                String host = getEC2HostAddress(computer, instance);
 
                 if ("0.0.0.0".equals(host)) {
                     logger.println("Invalid host 0.0.0.0, your host is most likely waiting for an ip address.");
@@ -262,6 +312,7 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
                         proxyData = new HTTPProxyData(address.getHostName(), address.getPort());
                     }
                     conn.setProxyData(proxyData);
+                    logger.println("Using HTTP Proxy Configuration");
                 }
                 // currently OpenSolaris offers no way of verifying the host certificate, so just accept it blindly,
                 // hoping that no man-in-the-middle attack is going on.
@@ -274,9 +325,23 @@ public class EC2UnixLauncher extends EC2ComputerLauncher {
                 return conn; // successfully connected
             } catch (IOException e) {
                 // keep retrying until SSH comes up
+                logger.println("Failed to connect via ssh: " + e.getMessage());
                 logger.println("Waiting for SSH to come up. Sleeping 5.");
                 Thread.sleep(5000);
             }
+        }
+    }
+
+    private String getEC2HostAddress(EC2Computer computer, Instance inst) {
+        if (computer.getNode().usePrivateDnsName) {
+            return inst.getPrivateDnsName();
+        } else {
+            String host = inst.getPublicDnsName();
+            // If we fail to get a public DNS name, use the private IP.
+            if (host == null || host.equals("")) {
+                host = inst.getPrivateIpAddress();
+            }
+            return host;
         }
     }
 
