@@ -443,7 +443,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
             }
 
             boolean hasCustomTypeTag = false;
-            HashSet<Tag> inst_tags = null;
+            HashSet<Tag> inst_tags = new HashSet<Tag>();
             if (tags != null && !tags.isEmpty()) {
                 for(EC2Tag t : tags) {
                     inst_tags.add(new Tag(t.getName(), t.getValue()));
@@ -454,9 +454,6 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
                 }
             }
             if (!hasCustomTypeTag) {
-                if (inst_tags == null){
-                    inst_tags = new HashSet<Tag>();
-                }
             	inst_tags.add(new Tag(EC2Tag.TAG_NAME_JENKINS_SLAVE_TYPE, "demand"));
             }
 
@@ -493,7 +490,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
 
 
                 /* Now that we have our instance, we can set tags on it */
-                if (inst_tags != null) {
+                if (inst_tags.size() > 0) {
                     updateRemoteTags(ec2, inst_tags, "InvalidInstanceID.NotFound", inst.getInstanceId());
 
                     // That was a remote request - we should also update our local instance data.
