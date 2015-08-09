@@ -48,13 +48,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import javax.servlet.ServletException;
-
 import jenkins.util.Timer;
 import net.sf.json.JSONObject;
 
 import org.apache.commons.lang.StringUtils;
-import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 
@@ -79,6 +76,7 @@ import com.amazonaws.services.ec2.model.TerminateInstancesRequest;
  *
  * @author Kohsuke Kawaguchi
  */
+@SuppressWarnings("serial")
 public abstract class EC2AbstractSlave extends Slave {
     /**
      * Initial number of seconds to wait before trying to reconnect to a rebooting slave
@@ -90,7 +88,7 @@ public abstract class EC2AbstractSlave extends Slave {
     private static final int REBOOT_RECONNECT_PENDING = 5;
 
     private static final OfflineCause REBOOT_OFFLINE_CAUSE = new ByCLI("Rebooting after build");
-    
+
     protected String instanceId;
 
     /**
@@ -126,7 +124,7 @@ public abstract class EC2AbstractSlave extends Slave {
 
 
     protected final int launchTimeout;
-    
+
     protected transient volatile Future<?> ongoingRebootReconnect;
 
     // Deprecated by the AMITypeData data structure
@@ -161,6 +159,7 @@ public abstract class EC2AbstractSlave extends Slave {
         readResolve();
     }
 
+    @Override
     protected Object readResolve() {
     	/*
     	 * If instanceId is null, this object was deserialized from an old
@@ -638,6 +637,6 @@ public abstract class EC2AbstractSlave extends Slave {
             }
         }
     }
-    
+
     private static final Logger LOGGER = Logger.getLogger(EC2AbstractSlave.class.getName());
 }
