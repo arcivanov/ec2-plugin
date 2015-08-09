@@ -48,13 +48,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import javax.servlet.ServletException;
-
 import jenkins.util.Timer;
 import net.sf.json.JSONObject;
 
 import org.apache.commons.lang.StringUtils;
-import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.StaplerRequest;
 
@@ -79,6 +76,7 @@ import com.amazonaws.services.ec2.model.TerminateInstancesRequest;
  *
  * @author Kohsuke Kawaguchi
  */
+@SuppressWarnings("serial")
 public abstract class EC2AbstractSlave extends Slave {
     /**
      * Initial number of seconds to wait before trying to reconnect to a rebooting slave
@@ -90,7 +88,7 @@ public abstract class EC2AbstractSlave extends Slave {
     private static final int REBOOT_RECONNECT_PENDING = 5;
 
     private static final OfflineCause REBOOT_OFFLINE_CAUSE = new ByCLI("Rebooting after build");
-    
+
     protected String instanceId;
 
     /**
@@ -126,7 +124,7 @@ public abstract class EC2AbstractSlave extends Slave {
 
 
     protected final int launchTimeout;
-    
+
     protected transient volatile Future<?> ongoingRebootReconnect;
 
     // Deprecated by the AMITypeData data structure
@@ -161,6 +159,7 @@ public abstract class EC2AbstractSlave extends Slave {
         readResolve();
     }
 
+    @Override
     protected Object readResolve() {
     	/*
     	 * If instanceId is null, this object was deserialized from an old
@@ -191,27 +190,39 @@ public abstract class EC2AbstractSlave extends Slave {
         case T1Micro:       return 1;
         case M1Small:       return 1;
         case M1Medium:      return 2;
+        case M3Medium:      return 2;
         case M1Large:       return 4;
+        case M3Large:       return 4;
+        case M4Large:       return 4;
         case C1Medium:      return 5;
         case M2Xlarge:      return 6;
         case C3Large:       return 7;
+        case C4Large:       return 7;
         case M1Xlarge:      return 8;
         case M22xlarge:     return 13;
         case M3Xlarge:      return 13;
+        case M4Xlarge:      return 13;
         case C3Xlarge:      return 14;
+        case C4Xlarge:      return 14;
         case C1Xlarge:      return 20;
         case M24xlarge:     return 26;
         case M32xlarge:     return 26;
+        case M42xlarge:     return 26;
         case G22xlarge:     return 26;
         case C32xlarge:     return 28;
+        case C42xlarge:     return 28;
         case Cc14xlarge:    return 33;
         case Cg14xlarge:    return 33;
         case Hi14xlarge:    return 35;
         case Hs18xlarge:    return 35;
         case C34xlarge:     return 55;
+        case C44xlarge:     return 55;
+        case M44xlarge:     return 55;
         case Cc28xlarge:    return 88;
         case Cr18xlarge:    return 88;
         case C38xlarge:     return 108;
+        case C48xlarge:     return 108;
+        case M410xlarge:    return 120;
         //We don't have a suggestion, but we don't want to fail completely surely?
         default:            return 1;
         }
@@ -626,6 +637,6 @@ public abstract class EC2AbstractSlave extends Slave {
             }
         }
     }
-    
+
     private static final Logger LOGGER = Logger.getLogger(EC2AbstractSlave.class.getName());
 }

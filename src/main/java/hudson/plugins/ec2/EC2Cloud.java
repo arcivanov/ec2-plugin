@@ -395,7 +395,7 @@ public abstract class EC2Cloud extends Cloud {
                             public Node call() throws Exception {
                                 // TODO: record the output somewhere
                                 try {
-                                    EC2AbstractSlave s = t.provision(new StreamTaskListener(System.out));
+                                    EC2AbstractSlave s = t.provision(StreamTaskListener.fromStdout());
                                     Hudson.getInstance().addNode(s);
                                     // EC2 instances may have a long init script. If we declare
                                     // the provisioning complete by returning without the connect
@@ -474,6 +474,8 @@ public abstract class EC2Cloud extends Cloud {
     public synchronized static AmazonEC2 connect(AWSCredentialsProvider credentialsProvider, URL endpoint) {
         awsCredentialsProvider = credentialsProvider;
         ClientConfiguration config = new ClientConfiguration();
+        config.setMaxErrorRetry(16); // Default retry limit (3) is low and often cause problems. Raise it a bit.
+        // See: https://issues.jenkins-ci.org/browse/JENKINS-26800
         config.setSignerOverride("QueryStringSignerType");
         ProxyConfiguration proxyConfig = Jenkins.getInstance().proxy;
         Proxy proxy = proxyConfig == null ? Proxy.NO_PROXY : proxyConfig.createProxy(endpoint.getHost());
